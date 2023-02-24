@@ -83,7 +83,7 @@ typedef enum {
 } HTMLP_BUFFER_ERRORS;
 
 /* create a htmlp info structure */
-HTMLP_EXTERN htmlp_info_t htmlp_create_json_info(HTMLP_INFO_DATA_TYPE type,
+HTMLP_EXTERN htmlp_info_t htmlp_info_create(HTMLP_INFO_DATA_TYPE type,
                                                  const char *data);
 /* initialise the json parpser using the information stored in
    the htmlp_info_t structure */
@@ -151,10 +151,10 @@ HTMLP_STATIC int htmlp_token_stack_ptr = 0;
 HTMLP_STATIC htmlp_token htmlp_token_stack[HTMLP_TOKEN_STACK_CAPACITY] = {0};
 
 /* htmlp token stack used for token manipulation */
-HTMLP_STATIC int htmlp_push_token_stack(htmlp_token tok);
-HTMLP_STATIC htmlp_token htmlp_pop_token_stack(void);
-HTMLP_STATIC int htmlp_empty_token_stack(void);
-HTMLP_STATIC int htmlp_full_token_stack(void);
+HTMLP_STATIC int htmlp_token_stack_push(htmlp_token tok);
+HTMLP_STATIC htmlp_token htmlp_token_stack_pop(void);
+HTMLP_STATIC int htmlp_token_stack_empty(void);
+HTMLP_STATIC int htmlp_token_stack_full(void);
 
 #define HTMLP_DEBUG_STACK_CAPACITY 20
 
@@ -162,10 +162,10 @@ HTMLP_STATIC int htmlp_debug_stack_size = 0;
 HTMLP_STATIC int htmlp_debug_stack_ptr = 0;
 HTMLP_STATIC char *htmlp_debug_stack[HTMLP_DEBUG_STACK_CAPACITY];
 
-HTMLP_STATIC int htmlp_push_error_debug(const char *msg);
-HTMLP_STATIC const char *htmlp_pop_error_debug(void);
-HTMLP_STATIC int htmlp_stack_full_debug(void);
-HTMLP_STATIC int htmlp_stack_empty_debug(void);
+HTMLP_STATIC int htmlp_debug_stack_push(const char *msg);
+HTMLP_STATIC const char *htmlp_debug_stack_pop(void);
+HTMLP_STATIC int htmlp_debug_stack_full(void);
+HTMLP_STATIC int htmlp_debug_stack_empty(void);
 
 /* functions to return token primitives */
 HTMLP_STATIC htmlp_token htmlp_empty_token();
@@ -175,9 +175,9 @@ HTMLP_STATIC htmlp_token htmlp_close_tag_token();
 HTMLP_STATIC htmlp_token htmlp_undefined_token();
 HTMLP_STATIC htmlp_token htmlp_error_token(const char *msg);
 
-HTMLP_STATIC int htmlp_push_token_stack(htmlp_token tok)
+HTMLP_STATIC int htmlp_token_stack_push(htmlp_token tok)
 {
-        if (!htmlp_full_token_stack())
+        if (!htmlp_token_stack_full())
                 htmlp_token_stack_size++;
         htmlp_token_stack[htmlp_token_stack_ptr].type = tok.type;
 
@@ -188,9 +188,9 @@ HTMLP_STATIC int htmlp_push_token_stack(htmlp_token tok)
         return HTMLP_NO_ERROR;
 }
 
-HTMLP_STATIC htmlp_token htmlp_pop_token_stack(void)
+HTMLP_STATIC htmlp_token htmlp_token_stack_pop(void)
 {
-        if (htmlp_empty_token_stack())
+        if (htmlp_token_stack_empty())
                 return htmlp_empty_token();
 
         htmlp_token_stack_ptr--;
@@ -203,20 +203,20 @@ HTMLP_STATIC htmlp_token htmlp_pop_token_stack(void)
         return tok;
 }
 
-HTMLP_STATIC int htmlp_empty_token_stack(void)
+HTMLP_STATIC int htmlp_token_stack_empty(void)
 {
         return htmlp_token_stack_size == 0;
 }
 
-HTMLP_STATIC int htmlp_full_token_stack(void)
+HTMLP_STATIC int htmlp_token_stack_full(void)
 {
         return htmlp_token_stack_size == HTMLP_TOKEN_STACK_CAPACITY;
 }
 
-HTMLP_STATIC int htmlp_push_error_debug(const char *msg)
+HTMLP_STATIC int htmlp_debug_stack_push(const char *msg)
 {
         if (msg != NULL) {
-                if (!htmlp_stack_full_debug())
+                if (!htmlp_debug_stack_full())
                         htmlp_debug_stack_size++;
                 if (htmlp_debug_stack[htmlp_debug_stack_ptr] != NULL)
                         free(htmlp_debug_stack[htmlp_debug_stack_ptr]);
@@ -231,9 +231,9 @@ HTMLP_STATIC int htmlp_push_error_debug(const char *msg)
         return 0;
 }
 
-HTMLP_STATIC const char *htmlp_pop_error_debug(void)
+HTMLP_STATIC const char *htmlp_debug_stack_pop(void)
 {
-        if (!htmlp_stack_empty_debug()) {
+        if (!htmlp_debug_stack_empty()) {
                 htmlp_debug_stack_ptr--;
                 if (htmlp_debug_stack_ptr < 0)
                         htmlp_debug_stack_ptr += HTMLP_DEBUG_STACK_CAPACITY;
@@ -243,12 +243,12 @@ HTMLP_STATIC const char *htmlp_pop_error_debug(void)
         return "No Error";
 }
 
-HTMLP_STATIC int htmlp_stack_full_debug(void)
+HTMLP_STATIC int htmlp_debug_stack_full(void)
 {
         return htmlp_debug_stack_size == HTMLP_DEBUG_STACK_CAPACITY;
 }
 
-HTMLP_STATIC int htmlp_stack_empty_debug(void)
+HTMLP_STATIC int htmlp_debug_stack_empty(void)
 {
         return htmlp_debug_stack_size == 0;
 }
@@ -297,6 +297,19 @@ HTMLP_STATIC htmlp_token htmlp_open_tag_token()
 {
         tok = htmlp_empty_token();
         tok.type = HTMLP_TYPE_OPEN_TAG;
+        htmlp_append_buffer(&tok.token, lookahead);
+        lookahead = next_char();
+        while (lookahead != '>' && lookahead != '<' && lookahead != EOF) {
+                htmlp_append_buffer(&tok.token, lookahead);
+                lookahead = next_char();
+        }
+
+        if (lookahead == EOF || lookahead == '<') {
+                tok = htmlp_error_token("Unterminated html tag");
+        } else {
+                htmlp_append_buffer(&tok.token, lookahead);
+                lookahead = next_char();
+        }
         return tok;
 }
 
@@ -314,8 +327,21 @@ HTMLP_STATIC htmlp_token htmlp_close_tag_token()
         if (lookahead == EOF || lookahead == '<') {
                 tok = htmlp_error_token("Unterminated html tag");
         } else {
+                htmlp_append_buffer(&tok.token, lookahead);
                 lookahead = next_char();
         }
+        return tok;
+}
+
+HTMLP_STATIC htmlp_token htmlp_string_token()
+{
+        tok = htmlp_empty_token();
+        tok.type = HTMLP_TYPE_STRING;
+        while (lookahead >= 0x20 && lookahead <= 0x7e) {
+                htmlp_append_buffer(&tok.token, lookahead);
+                lookahead = next_char();
+        }
+
         return tok;
 }
 
@@ -351,7 +377,7 @@ HTMLP_STATIC const char *htmlp_get_error_init(int status)
             ? msgs[status] : "Undefined Error!");
 }
 
-HTMLP_EXTERN htmlp_info_t htmlp_create_json_info(HTMLP_INFO_DATA_TYPE type,
+HTMLP_EXTERN htmlp_info_t htmlp_info_create(HTMLP_INFO_DATA_TYPE type,
                                               const char *data)
 {
         HTMLP_INFO_DATA_TYPE my_type = type;
@@ -375,7 +401,7 @@ HTMLP_EXTERN int htmlp_init(htmlp_info_t info)
                 next_char = next_char_file;
                 curr_fd = fopen(info.data, "r");
                 if (!curr_fd) {
-                        htmlp_push_error_debug(htmlp_get_error_init(HTMLP_FILE_ERROR));
+                        htmlp_debug_stack_push(htmlp_get_error_init(HTMLP_FILE_ERROR));
                         return HTMLP_FILE_ERROR;
                 }
                 break;
@@ -385,7 +411,7 @@ HTMLP_EXTERN int htmlp_init(htmlp_info_t info)
                 htmlp_init_buffer(&curr_buffer);
                 htmlp_write_buffer(&curr_buffer, info.data);
                 if (htmlp_had_error()) {
-                        htmlp_push_error_debug(htmlp_get_error_init(HTMLP_BUFFER_ERROR));
+                        htmlp_debug_stack_push(htmlp_get_error_init(HTMLP_BUFFER_ERROR));
                         return HTMLP_BUFFER_ERROR;
                 }
                 break;
@@ -423,7 +449,7 @@ HTMLP_STATIC const char *htmlp_get_error_buffer(int status)
 HTMLP_EXTERN int htmlp_init_buffer(buffer_t *buffer)
 {
         if (buffer == NULL) {
-                htmlp_push_error_debug(htmlp_get_error_buffer(HTMLP_NULL_BUFFER_ERROR));
+                htmlp_debug_stack_push(htmlp_get_error_buffer(HTMLP_NULL_BUFFER_ERROR));
                 return HTMLP_NULL_BUFFER_ERROR;
         }
 
@@ -433,7 +459,7 @@ HTMLP_EXTERN int htmlp_init_buffer(buffer_t *buffer)
 
         if (buffer->data == NULL) {
                 htmlp_free_buffer(buffer);
-                htmlp_push_error_debug(htmlp_get_error_buffer(HTMLP_DATA_BUFFER_ERROR));
+                htmlp_debug_stack_push(htmlp_get_error_buffer(HTMLP_DATA_BUFFER_ERROR));
                 return HTMLP_DATA_BUFFER_ERROR;
         }
 
@@ -445,12 +471,12 @@ HTMLP_EXTERN int htmlp_init_buffer(buffer_t *buffer)
 HTMLP_EXTERN int htmlp_clear_buffer(buffer_t *buffer)
 {
         if (buffer == NULL) {
-                htmlp_push_error_debug(htmlp_get_error_buffer(HTMLP_NULL_BUFFER_ERROR));
+                htmlp_debug_stack_push(htmlp_get_error_buffer(HTMLP_NULL_BUFFER_ERROR));
                 return HTMLP_NULL_BUFFER_ERROR;
         }
 
         if (buffer->data == NULL) {
-                htmlp_push_error_debug(htmlp_get_error_buffer(HTMLP_DATA_BUFFER_ERROR));
+                htmlp_debug_stack_push(htmlp_get_error_buffer(HTMLP_DATA_BUFFER_ERROR));
                 return HTMLP_DATA_BUFFER_ERROR;
         }
 
@@ -463,18 +489,18 @@ HTMLP_EXTERN int htmlp_clear_buffer(buffer_t *buffer)
 HTMLP_EXTERN int htmlp_append_buffer(buffer_t *buffer, char c)
 {
         if (buffer == NULL) {
-                htmlp_push_error_debug(htmlp_get_error_buffer(HTMLP_NULL_BUFFER_ERROR));
+                htmlp_debug_stack_push(htmlp_get_error_buffer(HTMLP_NULL_BUFFER_ERROR));
                 return HTMLP_NULL_BUFFER_ERROR;
         }
 
         if (buffer->data == NULL) {
-                htmlp_push_error_debug(htmlp_get_error_buffer(HTMLP_DATA_BUFFER_ERROR));
+                htmlp_debug_stack_push(htmlp_get_error_buffer(HTMLP_DATA_BUFFER_ERROR));
                 return HTMLP_DATA_BUFFER_ERROR;
         }
 
         if (buffer->size >= buffer->capacity) {
                 if (htmlp_resize_buffer(buffer) != 0) {
-                        htmlp_push_error_debug(htmlp_get_error_buffer(HTMLP_RESIZE_BUFFER_ERROR));
+                        htmlp_debug_stack_push(htmlp_get_error_buffer(HTMLP_RESIZE_BUFFER_ERROR));
                         return HTMLP_RESIZE_BUFFER_ERROR;
                 }
         }
@@ -492,12 +518,12 @@ HTMLP_EXTERN int htmlp_write_buffer(buffer_t *buffer, const char *data)
 HTMLP_EXTERN int htmlp_insert_buffer(buffer_t *buffer, const char *data, int offset)
 {
         if (buffer == NULL) {
-                htmlp_push_error_debug(htmlp_get_error_buffer(HTMLP_NULL_BUFFER_ERROR));
+                htmlp_debug_stack_push(htmlp_get_error_buffer(HTMLP_NULL_BUFFER_ERROR));
                 return HTMLP_NULL_BUFFER_ERROR;
         }
 
         if (buffer->data == NULL) {
-                htmlp_push_error_debug(htmlp_get_error_buffer(HTMLP_DATA_BUFFER_ERROR));
+                htmlp_debug_stack_push(htmlp_get_error_buffer(HTMLP_DATA_BUFFER_ERROR));
                 return HTMLP_DATA_BUFFER_ERROR;
         }
 
@@ -521,18 +547,18 @@ HTMLP_EXTERN int htmlp_insert_buffer(buffer_t *buffer, const char *data, int off
 HTMLP_EXTERN int htmlp_resize_buffer(buffer_t *buffer)
 {
         if (buffer == NULL) {
-                htmlp_push_error_debug(htmlp_get_error_buffer(HTMLP_NULL_BUFFER_ERROR));
+                htmlp_debug_stack_push(htmlp_get_error_buffer(HTMLP_NULL_BUFFER_ERROR));
                 return HTMLP_NULL_BUFFER_ERROR;
         }
 
         if (buffer->data == NULL) {
-                htmlp_push_error_debug(htmlp_get_error_buffer(HTMLP_DATA_BUFFER_ERROR));
+                htmlp_debug_stack_push(htmlp_get_error_buffer(HTMLP_DATA_BUFFER_ERROR));
                 return HTMLP_DATA_BUFFER_ERROR;
         }
 
         char *new_data = (typeof(new_data))realloc(buffer->data, (buffer->capacity*2) + 1);
         if (new_data == NULL) {
-                htmlp_push_error_debug(htmlp_get_error_buffer(HTMLP_RESIZE_BUFFER_ERROR));
+                htmlp_debug_stack_push(htmlp_get_error_buffer(HTMLP_RESIZE_BUFFER_ERROR));
                 return HTMLP_RESIZE_BUFFER_ERROR;
         }
 
@@ -568,34 +594,33 @@ HTMLP_EXTERN const char *htmlp_get_data_token(htmlp_token tok)
 
 HTMLP_EXTERN htmlp_token htmlp_peek_token()
 {
-        htmlp_push_token_stack(htmlp_get_token());
+        htmlp_token_stack_push(htmlp_get_token());
         return tok;
 }
 
 HTMLP_EXTERN htmlp_token htmlp_get_token()
 {
-        if (!htmlp_empty_token_stack())
-                return htmlp_pop_token_stack();
+        if (!htmlp_token_stack_empty())
+                return htmlp_token_stack_pop();
 
         while (lookahead == ' ' || lookahead == '\t'
                || lookahead == '\n' || lookahead == '\r')
                 lookahead = next_char();
 
-        switch (lookahead) {
-        case EOF:
+        if (lookahead == EOF) {
                 return htmlp_eof_token();
-        case '<':
-
+        } else if (lookahead == '<') {
                 return htmlp_open_tag_token();
-                return htmlp_close_tag_token();
-        default:
+        } else if (lookahead >= 0x20 && lookahead <= 0x7e) {
+                return htmlp_string_token();
+        } else {
                 return htmlp_undefined_token();
         }
 }
 
 HTMLP_EXTERN htmlp_token htmlp_unget_token(htmlp_token tok)
 {
-        htmlp_push_token_stack(tok);
+        htmlp_token_stack_push(tok);
         return tok;
 }
 
@@ -607,12 +632,12 @@ HTMLP_EXTERN int htmlp_rewind(void)
 
 HTMLP_EXTERN int htmlp_had_error(void)
 {
-        return !htmlp_stack_empty_debug();
+        return !htmlp_debug_stack_empty();
 }
 
 HTMLP_EXTERN const char *htmlp_get_error(void)
 {
-        return htmlp_pop_error_debug();
+        return htmlp_debug_stack_pop();
 }
 
 #endif /* HTMLP_IMPLEMENTATION */
