@@ -132,6 +132,7 @@ HTMLP_EXTERN const char *htmlp_get_error(void);
 #ifdef HTMLP_DEBUG
 
 #define HTMLP_TOKEN_STACK_CAPACITY 10
+#define HTMLP_CHAR_STACK_CAPACITY 10
 
 /* @tok stores the current token
    @lookahead stores the current character in the file or buffer
@@ -156,6 +157,17 @@ HTMLP_STATIC htmlp_token htmlp_token_stack_pop(void);
 HTMLP_STATIC int htmlp_token_stack_empty(void);
 HTMLP_STATIC int htmlp_token_stack_full(void);
 
+/* used in order to un-get characters, and peek characters */
+HTMLP_STATIC int htmlp_char_stack_size = 0;
+HTMLP_STATIC int htmlp_char_stack_ptr = 0;
+HTMLP_STATIC int htmlp_char_stack[HTMLP_CHAR_STACK_CAPACITY] = {0};
+
+/* htmlp character stack used for character manipulation */
+HTMLP_STATIC int htmlp_char_stack_push(int c);
+HTMLP_STATIC int htmlp_char_stack_pop(void);
+HTMLP_STATIC int htmlp_char_stack_empty(void);
+HTMLP_STATIC int htmlp_char_stack_full(void);
+
 #define HTMLP_DEBUG_STACK_CAPACITY 20
 
 HTMLP_STATIC int htmlp_debug_stack_size = 0;
@@ -174,6 +186,8 @@ HTMLP_STATIC htmlp_token htmlp_open_tag_token();
 HTMLP_STATIC htmlp_token htmlp_close_tag_token();
 HTMLP_STATIC htmlp_token htmlp_undefined_token();
 HTMLP_STATIC htmlp_token htmlp_error_token(const char *msg);
+
+HTMLP_STATIC int htmlp_peek_char(void);
 
 HTMLP_STATIC int htmlp_token_stack_push(htmlp_token tok)
 {
@@ -211,6 +225,36 @@ HTMLP_STATIC int htmlp_token_stack_empty(void)
 HTMLP_STATIC int htmlp_token_stack_full(void)
 {
         return htmlp_token_stack_size == HTMLP_TOKEN_STACK_CAPACITY;
+}
+
+HTMLP_STATIC int htmlp_char_stack_push(int c)
+{
+        if (!htmlp_char_stack_full())
+                htmlp_char_stack_size++;
+        htmlp_char_stack[htmlp_char_stack_ptr] = c;
+        htmlp_char_stack_ptr = (htmlp_char_stack_ptr + 1) % HTMLP_CHAR_STACK_CAPACITY;
+        return HTMLP_NO_ERROR;
+}
+
+HTMLP_STATIC int htmlp_char_stack_pop(void)
+{
+        if (htmlp_char_stack_empty())
+                return 0;
+        htmlp_char_stack_ptr--;
+        htmlp_char_stack_size--;
+        if (htmlp_char_stack_ptr < 0)
+                htmlp_char_stack_ptr += HTMLP_CHAR_STACK_CAPACITY;
+        return htmlp_char_stack[htmlp_char_stack_ptr];
+}
+
+HTMLP_STATIC int htmlp_char_stack_empty(void)
+{
+        return htmlp_char_stack_size == 0;
+}
+
+HTMLP_STATIC int htmlp_char_stack_full(void)
+{
+        return htmlp_char_stack_size == HTMLP_CHAR_STACK_CAPACITY;
 }
 
 HTMLP_STATIC int htmlp_debug_stack_push(const char *msg)
@@ -263,11 +307,15 @@ HTMLP_STATIC int htmlp_debug_stack_empty(void)
 
 HTMLP_STATIC int next_char_file(void)
 {
+        if (!htmlp_char_stack_empty())
+                return htmlp_char_stack_pop();
         return fgetc(curr_fd);
 }
 
 HTMLP_STATIC int next_char_buffer(void)
 {
+        if (!htmlp_char_stack_empty())
+                return htmlp_char_stack_pop();
         if (curr_buffer_ptr < curr_buffer.size)
                 return curr_buffer.data[curr_buffer_ptr++];
         return EOF;
@@ -337,7 +385,8 @@ HTMLP_STATIC htmlp_token htmlp_string_token()
 {
         tok = htmlp_empty_token();
         tok.type = HTMLP_TYPE_STRING;
-        while (lookahead >= 0x20 && lookahead <= 0x7e) {
+        while (lookahead >= 0x20 && lookahead <= 0x7e
+               && (lookahead != '<' && htmlp_peek_char() != '/')) {
                 htmlp_append_buffer(&tok.token, lookahead);
                 lookahead = next_char();
         }
@@ -592,6 +641,13 @@ HTMLP_EXTERN const char *htmlp_get_data_token(htmlp_token tok)
         return tok.token.data;
 }
 
+HTMLP_STATIC int htmlp_peek_char(void)
+{
+        int peek = next_char();
+        htmlp_char_stack_push(peek);
+        return peek;
+}
+
 HTMLP_EXTERN htmlp_token htmlp_peek_token()
 {
         htmlp_token_stack_push(htmlp_get_token());
@@ -610,7 +666,10 @@ HTMLP_EXTERN htmlp_token htmlp_get_token()
         if (lookahead == EOF) {
                 return htmlp_eof_token();
         } else if (lookahead == '<') {
-                return htmlp_open_tag_token();
+                if (htmlp_peek_char() == '/')
+                        return htmlp_close_tag_token();
+                else
+                        return htmlp_open_tag_token();
         } else if (lookahead >= 0x20 && lookahead <= 0x7e) {
                 return htmlp_string_token();
         } else {
